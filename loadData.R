@@ -3,7 +3,7 @@ require("rjson")
 
 model <- NULL
 modelTimestamp <- ymd("1970-1-1")
-modelLastCheck <- now()
+modelLastCheck <- ymd("1970-1-1")
 
 #loads the timestamp of the model (modelTimestamp) stored on google drive
 loadModelTimestamp <- function() {
@@ -36,17 +36,6 @@ reloadModel <- function(seconds) {
         modelLastCheck <<- now()
     }
 }    
-
-# load tracks
-loadTracks <- function() {
-    print("load tracks")
-    x = getBinaryURL("https://docs.google.com/uc?export=download&id=0BxO4UBF1t4EdSmZqTlJvSXFOOUU", followlocation = TRUE, ssl.verifypeer = FALSE)
-    con <- rawConnection(x, open='rb')
-    tracks <- fromJSON(file=con)
-    close(con)
-    rm(x)
-    tracks
-}
 
 loadSectorAggregate <- function() {
     print("load sectorAggregate")

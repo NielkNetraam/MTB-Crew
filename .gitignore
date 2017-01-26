@@ -3,3 +3,7 @@
 .RData
 .Ruserdata
 .DS_Store
+data
+Nootbook.Rmd
+Nootbook.nb.html
+rsconnect

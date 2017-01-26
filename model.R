@@ -1,7 +1,7 @@
-library(plyr)
-library(dplyr)
-library(rpart)
-library(lubridate)
+require(plyr)
+require(dplyr)
+require(rpart)
+require(lubridate)
 
 
 createModel <- function(path) {
@@ -18,22 +18,17 @@ createModel <- function(path) {
     #simple regression tree model to predict the number of ride on track.
     model <- rpart(count ~ id+weekday+hour, method="anova", data=sectorDaily)
     
-    modelFile <- file(file.path(path,"data/model.RData"), "wb")
-    save(model, file =  modelFile)
-    close(modelFile)
-
-    modelFile <- file("/Users/mklein/Google Drive/MTBCrew/model.RData", "wb")
-    save(model, file =  modelFile)
-    close(modelFile)
-    
     modelTimestamp = now()
-    modelTimestampFile <- file(file.path(path,"data/modelTimestamp.RData"), "wb")
-    save(modelTimestamp, file =  modelTimestampFile)
-    close(modelTimestampFile)
-    
-    modelTimestampFile <- file("/Users/mklein/Google Drive/MTBCrew/modelTimestamp.RData", "wb")
-    save(modelTimestamp, file =  modelTimestampFile)
-    close(modelTimestampFile)
+
+    lapply(path, function(x) {
+        modelFile <- file(file.path(x,"model.RData"), "wb")
+        save(model, file =  modelFile)
+        close(modelFile)
+
+        modelTimestampFile <- file(file.path(x,"modelTimestamp.RData"), "wb")
+        save(modelTimestamp, file =  modelTimestampFile)
+        close(modelTimestampFile)
+    })
 }
 
-#createModel("/Users/mklein/Documents/R/MTB-Crew/MTBCrewModeler")
+#createModel(c("/Users/mklein/Documents/R/MTB-Crew/MTBCrewModeler/data", "/Users/mklein/Google Drive/MTBCrew"))
