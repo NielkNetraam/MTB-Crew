@@ -1,7 +1,6 @@
 require(lubridate)
 require("rjson")
 
-model <- NULL
 modelTimestamp <- ymd("1970-1-1")
 modelLastCheck <- ymd("1970-1-1")
 
@@ -25,16 +24,26 @@ loadModel <- function() {
 } 
 
 #loads the model "model" stored on google drive
-reloadModel <- function(seconds) {
-    if (difftime(now(), modelLastCheck,units="secs") >= seconds) {
-        lModelTimestamp <- loadModelTimestamp()
-        if (lModelTimestamp > modelTimestamp) {
-            print(paste("(re)load model: version", lModelTimestamp))
-            model <<- loadModel() 
-            modelTimestamp <<- lModelTimestamp
-        }
-        modelLastCheck <<- now()
+reloadModel <- function(model=NULL) {
+    result <- model
+    lModelTimestamp <- loadFile("modelTimestamp")  #loadModelTimestamp()
+    
+    reload <- FALSE
+    if (length(model) == 0)
+        reload <- TRUE
+    else if (length(model$timestamp) == 0) 
+        reload <- TRUE
+    else if (lModelTimestamp > model$timestamp) 
+        reload <- TRUE
+    
+    if (reload) {
+        print(paste("(re)load model: version", lModelTimestamp))
+#        result <- loadFile("trimmedModel")  # loadModel() 
+        result <- loadFile("model")  # loadModel() 
+        result$timestamp <- lModelTimestamp
     }
+
+    result
 }    
 
 loadSectorAggregate <- function() {

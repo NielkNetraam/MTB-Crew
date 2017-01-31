@@ -1,4 +1,4 @@
-2016*12#
+#
 # This is the server logic of a Shiny web application. You can run the 
 # application by clicking 'Run App' above.
 #
@@ -27,6 +27,9 @@ source("util.R")
 source("model.R")
 source("loadData.R")
 source("patrolData.R")
+source("buienradar.R")
+
+model <- NULL
 
 #simple regression tree model to predict the number of ride on track.
 #fit <- rpart(count ~ id+weekday+hour, method="anova", data=sectorDaily)
@@ -51,7 +54,10 @@ shinyServer(function(input, output) {
     sectorDetail <- reactive({ loadSectorDetail() })
     sectorRoundCounts <- reactive({ loadSectorRoundCounts() })
     sectorHourCounts <- reactive({ loadSectorHourCounts() })
-
+    holiday <- reactive({ loadHoliday() })
+    holidays <- reactive({ loadHolidays() })
+    
+    
     output$exportTimestamp <- renderText({ paste("Updated till: ", exportTimestamp) })
     
     trackOnSectors <- reactive({
@@ -102,14 +108,14 @@ shinyServer(function(input, output) {
         }    
     })
    
-    trackOnSectorsHourCounts <- reactive({ 
-        ts <- trackSector() %>% filter(model==1)%>% select(track_id, sector_id)
-        shc <- sectorHourCounts() 
-        merge(shc, ts, by.x="id", by.y="sector_id") %>% 
-            group_by(track_id, timestamp) %>% 
-            summarize(count=as.integer(mean(count))) %>% 
-            rename(c(track_id="id")) 
-    })
+    # trackOnSectorsHourCounts <- reactive({
+    #     ts <- trackSector() %>% filter(model==1)%>% select(track_id, sector_id)
+    #     shc <- sectorHourCounts() 
+    #     merge(shc, ts, by.x="id", by.y="sector_id") %>% 
+    #         group_by(track_id, timestamp) %>% 
+    #         summarize(count=as.integer(mean(count))) %>% 
+    #         rename(c(track_id="id")) 
+    # })
     
     trackHourCountsT <- reactive({ 
         trackDetail <- trackDetail()
@@ -117,13 +123,9 @@ shinyServer(function(input, output) {
         if (input$completeEfforts) 
             thc <- trackHourCounts() 
         else
-            thc <- trackOnSectorsHourCounts() 
+            thc <- getTrackOnSectorsHourCounts(trackSector(), sectorHourCounts())
 
-        head(thc)
-        fd <- as.POSIXlt(min(thc$timestamp)); fd$hour <- 0
-        ld <- as.POSIXlt(max(thc$timestamp)); ld$hour <- 23
-        
-        thcsq <- data.frame(timestamp = seq.POSIXt(fd,ld,by="hour"))
+        thcsq <- getTimeFrame(min(thc$timestamp), max(thc$timestamp))
         thcsq <- data.frame(id=rep(trackDetail[trackDetail$trackType==0,]$id, each=nrow(thcsq)), timestamp=thcsq)
         thcsq <- merge(thcsq, thc, by=c("id","timestamp"), all.x=TRUE)
         thcsq$count <- ifelse(is.na(thcsq$count), 0, thcsq$count)
@@ -133,10 +135,8 @@ shinyServer(function(input, output) {
     sectorHourCountsT <- reactive({ 
         sectorDetail <- sectorDetail()
         thc <- sectorHourCounts() 
-        fd <- as.POSIXlt(min(thc$timestamp)); fd$hour <- 0
-        ld <- as.POSIXlt(max(thc$timestamp)); ld$hour <- 23
-        
-        thcsq <- data.frame(timestamp = seq.POSIXt(fd,ld,by="hour"))
+
+        thcsq <- getTimeFrame(min(thc$timestamp), max(thc$timestamp))
         thcsq <- data.frame(id=rep(sectorDetail$id, each=nrow(thcsq)), timestamp=thcsq)
         thcsq <- merge(thcsq, thc, by=c("id","timestamp"), all.x=TRUE)
         thcsq$count <- ifelse(is.na(thcsq$count), 0, thcsq$count)
@@ -153,7 +153,7 @@ shinyServer(function(input, output) {
     })
     
     observeEvent(input$makeModel, {
-        createModel(drives)
+        createAndExportModel(drives)
     })
     
     observeEvent(input$makeExport, {
@@ -164,9 +164,14 @@ shinyServer(function(input, output) {
     })
 
     # Drop-down selection box for which data set
-    output$choose_track <- renderUI({
+    output$chooseTrack <- renderUI({
         trackDetail <- trackDetail()
         selectizeInput("trackSelection", "Choose a track:", c("Overall", trackDetail[trackDetail$trackType==0,]$name))
+    })
+    
+    output$chooseTrackForecast <- renderUI({
+        trackDetail <- trackDetail()
+        selectizeInput("trackSelectionForecast", "Choose a track:", c("Overall", trackDetail[trackDetail$trackType==0,]$name))
     })
     
     output$maintenance <- renderUI({
@@ -179,32 +184,43 @@ shinyServer(function(input, output) {
     })
     
     output$walhallaView <- renderTable({
-        overallCount() %>% 
+        withProgress(message = 'Loading data', value = 0, {
+            incProgress(1/2, detail = "start")
+            o <- overallCount() %>% 
             filter(class=="total") %>% 
             select(athletes, activities)
+            incProgress(2/2, detail = "ready")
+        })
+        
+        o
     })
     
     output$walhallaPlot <- renderPlotly({
-        a <- overallCount()
+        withProgress(message = 'Creating plot', value = 0, {
+            incProgress(1/4, detail = "load data")
+            a <- overallCount()
 
-        plotColors <- allColors[1:length(unique(a[a$year>0,]$year))]
-
-        ay <- a %>% filter(class=="year") %>% mutate(year=as.factor(year))
-        pyat <- plot_ly(data = ay , x=~year, y=~athletes,
-                        color=~year, colors = plotColors, type = 'bar', showlegend = FALSE) %>%
-            layout(xaxis = list(title = ""))
-        pyac <- plot_ly(data = ay , x=~year, y=~activities,
-                        color=~year, colors = plotColors, type = 'bar') 
-
-        am <- a %>% filter(class=="month") %>% mutate(month=as.factor(month),year=as.factor(year))
-        pmat <- plot_ly(data = am , x=~month, y=~athletes,
-                        color=~year, colors = plotColors, type = 'bar', showlegend = FALSE) %>%
-            layout(xaxis = list(title = ""), yaxis = list(title = ""))
-        pmac <- plot_ly(data = am , x=~month, y=~activities,
-                        color=~year, colors = plotColors,
-                        type = 'bar', showlegend = FALSE) %>%
-            layout(yaxis = list(title = ""))
-
+            plotColors <- allColors[1:length(unique(a[a$year>0,]$year))]
+    
+            incProgress(2/4, detail = "process")
+            ay <- a %>% filter(class=="year") %>% mutate(year=as.factor(year))
+            pyat <- plot_ly(data = ay , x=~year, y=~athletes,
+                            color=~year, colors = plotColors, type = 'bar', showlegend = FALSE) %>%
+                layout(xaxis = list(title = ""))
+            pyac <- plot_ly(data = ay , x=~year, y=~activities,
+                            color=~year, colors = plotColors, type = 'bar') 
+    
+            incProgress(3/4, detail = "process")
+            am <- a %>% filter(class=="month") %>% mutate(month=as.factor(month),year=as.factor(year))
+            pmat <- plot_ly(data = am , x=~month, y=~athletes,
+                            color=~year, colors = plotColors, type = 'bar', showlegend = FALSE) %>%
+                layout(xaxis = list(title = ""), yaxis = list(title = ""))
+            pmac <- plot_ly(data = am , x=~month, y=~activities,
+                            color=~year, colors = plotColors,
+                            type = 'bar', showlegend = FALSE) %>%
+                layout(yaxis = list(title = ""))
+            incProgress(4/4, detail = "ready")
+        })
 
         subplot(nrows=2,pyat,pmat,pyac,pmac, titleX = TRUE, titleY = TRUE, shareX = TRUE) %>%
             layout(title="Number of athletes and activities / period", margin = list(t=35))
@@ -277,28 +293,36 @@ shinyServer(function(input, output) {
     })
     
     output$plotTrackEfforts <- renderPlotly({
-        trackDetail <- trackDetail()
-        trackId <- trackDetail[trackDetail$name==input$trackSelection, "id"]
-        if (length(trackId) == 0) trackId = 1
-           
-        title <- paste0("Efforts in one activity - ", trackDetail[trackDetail$id==trackId,"name"])
-        
-        t <- trackActivityEfforts() %>% filter(id == trackId) %>% 
-            mutate(name = factor(paste(firstname, lastname))) %>% 
-            select(name, count, startDateLocal) %>% 
-            arrange(desc(count), startDateLocal) %>% 
-            mutate(position = 1) %>%
-            mutate(position = cumsum(position), rank = as.factor(rank(-count)))
-        
-        if (!input$trackEffortsCb) {
-            t <- t %>% group_by(name) %>%
-                summarize(count = max(count), startDateLocal = min(startDateLocal)) %>%
+        withProgress(message = 'Loading data', value = 0, {
+            lc <- 4; cc <- 1
+            incProgress(cc/lc, detail = "start"); cc <- cc+1
+            
+            trackDetail <- trackDetail()
+            trackId <- trackDetail[trackDetail$name==input$trackSelection, "id"]
+            if (length(trackId) == 0) trackId = 1
+               
+            title <- paste0("Efforts in one activity - ", trackDetail[trackDetail$id==trackId,"name"])
+            
+            incProgress(cc/lc, detail = "efoorts"); cc <- cc+1
+            t <- trackActivityEfforts() %>% filter(id == trackId) %>% 
+                mutate(name = factor(paste(firstname, lastname))) %>% 
+                select(name, count, startDateLocal) %>% 
                 arrange(desc(count), startDateLocal) %>% 
                 mutate(position = 1) %>%
                 mutate(position = cumsum(position), rank = as.factor(rank(-count)))
-        }
-        
-        xpos <- min(t$count)/2
+            
+            incProgress(cc/lc, detail = "aggregate"); cc <- cc+1
+            if (!input$trackEffortsCb) {
+                t <- t %>% group_by(name) %>%
+                    summarize(count = max(count), startDateLocal = min(startDateLocal)) %>%
+                    arrange(desc(count), startDateLocal) %>% 
+                    mutate(position = 1) %>%
+                    mutate(position = cumsum(position), rank = as.factor(rank(-count)))
+            }
+            
+            xpos <- min(t$count)/2
+            incProgress(cc/lc, detail = "ready"); cc <- cc+1
+        })
         
         plot_ly(data = t, x=~count, y = ~reorder(position, -position),type = 'bar', 
                 orientation = 'h', color = ~rank) %>%
@@ -409,40 +433,51 @@ shinyServer(function(input, output) {
         
         muh <- leaflet() %>% addTiles()
         
-        for (i in 1:nrow(td)) {
-            decode_track <- decode_pl(td[i,]$polyline)
-
-            lng_min <- ifelse(lng_min <= min(decode_track$lon), lng_min, min(decode_track$lon))
-            lat_min <- ifelse(lat_min <= min(decode_track$lat), lat_min, min(decode_track$lat))
-            lng_max <- ifelse(lng_max >= max(decode_track$lon), lng_max, max(decode_track$lon))
-            lat_max <- ifelse(lat_max >= max(decode_track$lat), lat_max, max(decode_track$lat))
+        withProgress(message = 'Loading data', value = 0, {
+            lc <- nrow(td) +  ifelse(input$infolevel == "Sectors", 1,0) + 2; cc <- 1
+            incProgress(cc/lc, detail = "start"); cc <- cc+1
             
-            muh <- muh %>% addPolylines(lng=decode_track$lon, lat=decode_track$lat, weight = 5-td[i,]$trackType,
-                                        color = td[i,]$color, popup = td[i,]$name)
-        }
+            for (i in 1:nrow(td)) {
+                incProgress(cc/lc, detail = "add track"); cc <- cc+1
+                decode_track <- decode_pl(td[i,]$polyline)
+    
+                lng_min <- ifelse(lng_min <= min(decode_track$lon), lng_min, min(decode_track$lon))
+                lat_min <- ifelse(lat_min <= min(decode_track$lat), lat_min, min(decode_track$lat))
+                lng_max <- ifelse(lng_max >= max(decode_track$lon), lng_max, max(decode_track$lon))
+                lat_max <- ifelse(lat_max >= max(decode_track$lat), lat_max, max(decode_track$lat))
+                
+                muh <- muh %>% addPolylines(lng=decode_track$lon, lat=decode_track$lat, weight = 5-td[i,]$trackType,
+                                            color = td[i,]$color, popup = td[i,]$name)
+            }
+            
+            if (nrow(td) == 1) {
+                muh <- muh %>% setView(lng = (lng_max+lng_min)/2, lat = (lat_max+lat_min)/2, zoom = 14) 
+            } else {
+                muh <- muh %>% setView(lng = (lng_max+lng_min)/2, lat = (lat_max+lat_min)/2, zoom = 12) 
+            }
+            
+            if (input$infolevel == "Sectors") {
+                incProgress(cc/lc, detail = "add sectors"); cc <- cc+1
+                
+                sd <- sectorFiltered() 
+                start <- coordinates2Lines(sd$short_name,
+                                           sd$start_p1_lat, sd$start_p1_lng, 
+                                           sd$start_p2_lat, sd$start_p2_lng)
+                
+                end <- coordinates2Lines(sd$short_name,
+                                           sd$end_p1_lat, sd$end_p1_lng, 
+                                           sd$end_p2_lat, sd$end_p2_lng)
+                
+                muh <- muh %>% 
+                    addPolylines(data = start, popup = ~id, color = "green", weight = 2, opacity = 0.7) %>%
+                    addPolylines(data = end, popup = ~id, color = "red", weight = 2, opacity = 0.7)
+            }
+    
+            muh <- muh %>% addLegend(position = "bottomleft", labels=td$name, colors=td$color)
+            
+            incProgress(cc/lc, detail = "add sectors"); cc <- cc+1
+        })
         
-        if (nrow(td) == 1) {
-            muh <- muh %>% setView(lng = (lng_max+lng_min)/2, lat = (lat_max+lat_min)/2, zoom = 14) 
-        } else {
-            muh <- muh %>% setView(lng = (lng_max+lng_min)/2, lat = (lat_max+lat_min)/2, zoom = 12) 
-        }
-        
-        if (input$infolevel == "Sectors") {
-            sd <- sectorFiltered() 
-            start <- coordinates2Lines(sd$short_name,
-                                       sd$start_p1_lat, sd$start_p1_lng, 
-                                       sd$start_p2_lat, sd$start_p2_lng)
-            
-            end <- coordinates2Lines(sd$short_name,
-                                       sd$end_p1_lat, sd$end_p1_lng, 
-                                       sd$end_p2_lat, sd$end_p2_lng)
-            
-            muh <- muh %>% 
-                addPolylines(data = start, popup = ~id, color = "green", weight = 2, opacity = 0.7) %>%
-                addPolylines(data = end, popup = ~id, color = "red", weight = 2, opacity = 0.7)
-        }
-
-        muh <- muh %>% addLegend(position = "bottomleft", labels=td$name, colors=td$color)
         muh
     })
     
@@ -450,17 +485,73 @@ shinyServer(function(input, output) {
 
     modelLocal <- reactive({
         autoInvalidate()
-        reloadModel(0)
-        model
+        reloadModel(model)
+    })
+
+    weatherForecast <- reactive({
+        autoInvalidate()
+        getWeatherForecast()    
+    })
+    
+    forecastData <- reactive({ 
+        weatherForecast <- weatherForecast()
+        
+        createForecastData(0, date(min(weatherForecast$timestamp)), 
+                           length(unique(date(weatherForecast$timestamp))), holiday(), holidays(), weatherForecast)
     })
     
     output$plotForecast <- renderPlotly({
-        model <- modelLocal()
-        forecastData <- data.frame(date=rep(seq(as.Date(now()), by=1, length.out = input$days),1,each=24), id = as.numeric(input$track), hour = rep(0:23,input$days))
-        forecastData <- forecastData %>% mutate(weekday = weekdays(date), month=month(date) ,time=ymd_h(paste(date,hour)))
-        forecastData$count <- predict(model, newdata = forecastData)
-        plot_ly(data=forecastData,  x = ~time, y=~count, type="scatter", mode="lines") %>%
-            layout(                yaxis = list(rangemode = "tozero"))
+        withProgress(message = 'Loading', value = 0, {
+            td <- trackDetail()
+            
+            lc <- 4; cc <- 1
+            incProgress(cc/lc, detail = "loading model"); cc <- cc+1
+            model <<- modelLocal()
+            
+            incProgress(cc/lc, detail = "transform"); cc <- cc+1
+            forecastData <- forecastData()
+            
+            incProgress(cc/lc, detail = "create plot"); cc <- cc+1
+
+            trackId <- -1
+            if (length(input$trackSelectionForecast) == 0) 
+                trackId <- 0
+            else if (input$trackSelectionForecast == "Overall") 
+                trackId <- 0
+            else 
+                trackId <- td[td$name==input$trackSelectionForecast, "id"]
+            
+            if (trackId == 0) {
+                p <- NULL
+                for (t in td[td$trackType==0,]$name) {
+                    trackName <- t
+                    trackId <- td[td$name==input$trackSelectionForecast, "id"]
+                    count <- forecast(model, trackName, forecastData) 
+                    
+                    if (length(p) == 0) {
+                        p <- plot_ly(data=forecastData, x = ~timestamp, y=count, name=trackName, type="scatter", mode="lines")
+                    } else {
+                        p <- p %>% add_trace(y = count, name = trackName, mode = 'lines')
+                    }
+                }
+                
+            } else {
+                trackName <- input$trackSelectionForecast
+                count <- forecast(model, trackName, forecastData) 
+                p <- plot_ly(data=forecastData, x = ~timestamp, y=count, name=trackName, type="scatter", mode="lines")
+            }
+
+            
+            incProgress(cc/lc, detail = "ready"); cc <- cc+1
+        })
+        
+        p %>% layout(yaxis = list(rangemode = "tozero"))
+    })
+
+    output$weatherFrame <- renderUI({
+        tags$iframe(src="https://gadgets.buienradar.nl/gadget/forecastandstation/6260",
+                    height=190, width=300, scrolling="no", noresize=NA, seamless=NA,
+                    hspace=0, vspace=0,  frameborder=0, marginheight=0, marginwidth=0)
     })
 })
 

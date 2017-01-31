@@ -16,7 +16,10 @@ gdFile <- c("trackDetail",
             "sectorHourCounts",
             "trackSector",
             "overallCount",
-            "exportTimestamp")
+            "exportTimestamp",
+            "model",
+            "trimmedModel",
+            "modelTimestamp")
 gdFilename <- c("trackDetail.csv", 
              "trackActivityEfforts.csv",
              "trackRoundCounts.csv",
@@ -26,7 +29,10 @@ gdFilename <- c("trackDetail.csv",
              "sectorHourCounts.csv",
              "trackSector.csv",
              "overallCount.csv",
-             "exportTimestamp.csv")
+             "exportTimestamp.csv",
+             "model.rds",
+             "trimmedModel.rds",
+             "modelTimestamp.rds")
 gdFiletype <- c("csv", 
                 "csv", 
                 "csv", 
@@ -36,7 +42,10 @@ gdFiletype <- c("csv",
                 "csv", 
                 "csv",
                 "csv",
-                "csv")
+                "csv",
+                "rds",
+                "rds",
+                "rds")
 gdLink <- c("0BxO4UBF1t4EdVE52TU1VOVFNSms",
             "0BxO4UBF1t4EdaHVKNC1YeGFhRGc",
             "0BxO4UBF1t4EdMzdVTGpLRklSOEk", 
@@ -46,7 +55,10 @@ gdLink <- c("0BxO4UBF1t4EdVE52TU1VOVFNSms",
             "0BxO4UBF1t4EdeUV2TkhYckQwV2M", 
             "0BxO4UBF1t4EdbXIzZW90ZUc1S1k",
             "0BxO4UBF1t4EdbHo0b0dEd3NTbDg",
-            "0BxO4UBF1t4EdVXFuQVd4UGw4UVU")
+            "0BxO4UBF1t4EdVXFuQVd4UGw4UVU",
+            "0BxO4UBF1t4EdUzZJXzZ6Smk4N0E",
+            "0BxO4UBF1t4EdNncwQXR2Q19jTFk",
+            "0BxO4UBF1t4EdQWo2VTFwZk1pcFk")
 
 googleDrive <- data.frame(file=gdFile, filename=gdFilename, filetype=as.factor(gdFiletype), link=gdLink)
 
@@ -66,6 +78,15 @@ loadFile <- function(file) {
         writeBin(x, destfile, useBytes = TRUE)
         rm(x)
         fileResult <- read.csv(destfile, sep=",")
+    } else {
+        if (fileDf$filetype == "rds") {
+            destfile <- tempfile()
+            
+            x = getBinaryURL(paste0("https://docs.google.com/uc?export=download&id=",fileDf$link), followlocation = TRUE, ssl.verifypeer = FALSE)
+            writeBin(x, destfile, useBytes = TRUE)
+            rm(x)
+            fileResult <- readRDS(destfile)
+        }
     }
 
     fileResult
@@ -111,4 +132,68 @@ coordinates2Lines <- function(id, lat1, lng1, lat2, lng2) {
         }
     }
     SpatialLinesDataFrame(sp_lines, df)
+}
+
+getTimeFrame <- function(timestamp_min, timestamp_max) {
+    firstDay <- as.POSIXlt(as.Date(timestamp_min)); firstDay$hour <- 0
+    lastDay  <- as.POSIXlt(as.Date(timestamp_max)); lastDay$hour  <- 23
+    data.frame(timestamp = seq.POSIXt(firstDay,lastDay,by="hour"))
+}
+
+shiftMonth <- function(month) {
+    ifelse(month <= 6, month + 6, month-6)
+}
+
+shiftWeekday <- function(weekDay) {
+    ifelse(weekDay <= 4, weekDay + 3, weekDay-4)
+}
+
+shiftYearday <- function(yearDay) {
+    ifelse(yearDay <= 183, yearDay + 183, yearDay-183)
+}
+
+startSummerTime <- function(year) {
+    date = as.Date(ymd(paste(year, "3-31",sep="-")))
+    sunday <- weekdays(ymd("2017-1-2"))
+    while(weekdays(date) != sunday) 
+        date <- date -1
+
+    date;	
+}
+
+endSummerTime <- function(year) {
+    date = as.Date(ymd(paste(year, "10-31",sep="-")))
+    sunday <- weekdays(ymd("2017-1-2"))
+    while(weekdays(date) != sunday) 
+        date <- date -1
+    
+    date;	
+}
+
+isSummerTime <- function(date) {
+    df <- data.frame(date, 
+                     isSummerTime = sapply(month(date), 
+                                           function(x) { ifelse(x[1]<3 | x[1]>10, FALSE, ifelse(x[1]>3 & x[1]<10, TRUE, NA)) }
+                                           )
+    )
+
+    if (sum((is.na(df$isSummerTime))) > 0) {
+        y <- unique(year(df[is.na(df$isSummerTime), "date"]))
+        stse <- data.frame(y, sts=sapply(y, startSummerTime), ste = sapply(y, endSummerTime))
+        df[is.na(df$isSummerTime), "isSummerTime"] <-
+            sapply(df[is.na(df$isSummerTime),"date"], 
+                   function(x) ifelse(month(x) == 3, x >= stse[stse$y==year(x),"sts"], x < stse[stse$y==year(x),"ste"]))
+    }
+    
+    df$isSummerTime
+}
+
+isHoliday <- function(date, holiday, holidays, region) {
+    ifelse(region == 0, r <- c(0,1,2,3), r <- c(0, region))
+    hs <- holidays %>% filter(region %in% r)
+    h <- merge(as.data.frame(date), hs) %>% 
+        filter(date>=start, date<= end) %>% 
+        select(date) %>% 
+        unique()
+    date %in% holiday$holiday | date %in% h$date
 }

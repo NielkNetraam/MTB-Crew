@@ -1,6 +1,7 @@
 library(shiny)
 library(plotly)
 library(leaflet)
+library(DT)
 
 nodename <-Sys.info()["nodename"]
 
@@ -8,14 +9,14 @@ shinyUI(
     navbarPage(
         theme = "cerulean", 
         "MTBCrew",
-        tabPanel("Walhalla",
+        tabPanel("Utrechtse Heuvelrug",
                  plotlyOutput("walhallaPlot"),
                  h4("Total numbers since 2016-01-01"),
                  tableOutput("walhallaView"),
                  br()
         ),
         tabPanel("Info",
-                 fluidRow(column(3, uiOutput("choose_track")),
+                 fluidRow(column(3, uiOutput("chooseTrack")),
                           column(3, radioButtons("infolevel", 
                                                  label = "Info level:", choices = c("Tracks", "Sectors"), 
                                                  selected = "Tracks", inline = TRUE)),
@@ -64,15 +65,10 @@ shinyUI(
                      
         ),
         tabPanel("Forecast",
-                 fluidRow(column(3, selectizeInput("track",
-                                                   "Choose a track:",
-                                                   choices = tracks2,
-                                                   multiple = FALSE,
-                                                   selected = 12
-                                                   )),
-                          column(3, sliderInput("days", "Number of days to forecast:", min = 7, max = 28, step = 7,value = 7))),
-                 plotlyOutput("plotForecast"),
-                 br()
+                 fluidRow(column(3, uiOutput("chooseTrackForecast"))),
+                 fluidRow(column(3, htmlOutput("weatherFrame")),
+                          column(9, plotlyOutput("plotForecast"))),
+                  br()
         ),
         navbarMenu("More",
                    tabPanel("Documentation",

@@ -324,6 +324,56 @@ loadExportTimestamp <- function() {
     }
 }
 
+loadHoliday <- function() {
+    if (isLocal()) {
+        holiday <- getTable("holiday")
+    } else {
+        holiday<- loadFile("holiday")    
+    }
+    holiday %>% mutate (holiday = ymd(holiday))
+}
+
+loadHolidays <- function() {
+    if (isLocal()) {
+        holidays <- getTable("holidays")
+    } else {
+        holidays<- loadFile("holidays")    
+    }
+    holidays %>% mutate (start = ymd(start), end = ymd(end), region=as.factor(region))
+}
+
+loadWeatherHourly <- function() {
+    if (isLocal()) {
+        weatherHourly <- getTable("weather_hourly")
+        
+        weatherHourly[is.na(weatherHourly$RH), "RH"] <- 0
+        weatherHourly[weatherHourly$RH==-1, "RH"] <- 0.5
+        weatherHourly[is.na(weatherHourly$Q), "Q"] <- 0
+
+        weatherHourly <- weatherHourly %>% 
+            mutate(timestamp = ymd_h(YYYYMMDD*100+HH-1), 
+                   temperature=T/10,
+                   precipitation = RH/10,
+                   rain = ifelse(R==1,TRUE,FALSE),
+                   snow = ifelse(S==1,TRUE,FALSE),
+                   sunshine = Q
+                   ) %>%
+            select(timestamp, temperature, precipitation, sunshine, rain, snow)
+    } else {
+        weatherHourly<- loadFile("weatherHourly")    
+    }
+}
+
+getTrackOnSectorsHourCounts <- function(trackSector, sectorHourCounts) {
+    ts <- trackSector %>% filter(model==1)%>% select(track_id, sector_id)
+    merge(sectorHourCounts, ts, by.x="id", by.y="sector_id") %>% 
+        group_by(track_id, timestamp) %>% 
+        summarize(count=as.integer(mean(count))) %>% 
+        dplyr::rename(id=track_id) 
+}
+
+
+
 #exportOverallCount(c("/Users/mklein/Documents/R/MTB-Crew/MTBCrewModeler/data","/Users/mklein/Google Drive/MTBCrew"))
 #exportTrack(c("/Users/mklein/Documents/R/MTB-Crew/MTBCrewModeler/data","/Users/mklein/Google Drive/MTBCrew"))
 #exportSector(c("/Users/mklein/Documents/R/MTB-Crew/MTBCrewModeler/data","/Users/mklein/Google Drive/MTBCrew"))

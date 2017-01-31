@@ -1,0 +1,183 @@
+---
+title: "Forecastmodel"
+author: "M. Klein"
+date: "29-1-2017"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library("plyr")
+library("dplyr")
+library("ggplot2")
+library(plotly)
+library("caret")
+library("randomForest")
+library("formattable")
+library("parallel")
+library("doParallel")
+
+source("patrolData.R")
+source("util.R")
+source("model.R")
+source("buienradar.R")
+```
+
+##Loading the data
+```{r load, cache=TRUE}
+holiday <- loadHoliday()
+holidays <- loadHolidays()
+weatherHourly <- loadWeatherHourly()
+trackDetail <- loadTrackDetail()
+trackSector <- loadTrackSector()
+sectorHourCounts <- loadSectorHourCounts()
+```
+
+#Features
+```{r features, cache=TRUE, dependson='load'}
+source("model.R")
+
+data <- createModelData(trackDetail, trackSector, sectorHourCounts, holiday, holidays, weatherHourly)
+```
+
+#Model
+
+The final modal is created on the whole data set with cross validation.    
+```{r train, cache=TRUE, warning=FALSE}
+set.seed(2017-01-29)
+
+cluster <- makeCluster(detectCores() - 1) # convention to leave 1 core for OS
+registerDoParallel(cluster)
+    
+fitControl <- trainControl(method = "cv",
+                           number = 10,
+                           allowParallel = TRUE)
+    
+dataTrack <- data %>% filter(id==2,hour>=6 & hour <=21) %>% select(-id, -timestamp)
+intrain <- createDataPartition(y=dataTrack$count, p=0.7, list=FALSE) #0.7
+predictors <- dataTrack[intrain,] %>% select(-count)
+predictorsCount <- dataTrack[intrain,"count"]
+validation <- dataTrack[-intrain,"count"]
+validationClasse <- dataTrack[-intrain,] %>% select(-count)
+
+ptm <- proc.time()
+md <- train(predictors,predictorsCount, method="rf", trControl = fitControl, nodesize = 5, ntree = 200)
+print(proc.time() - ptm)
+
+print(md)
+```
+
+```{r fc, cache=TRUE}
+weatherForecast <- getWeatherForecast()
+
+forecastData <- createForecastData(2, ymd("2017-01-30"), 14, holiday, holidays, weatherForecast)
+predictors <- forecastData %>% select(-timestamp)
+
+forecastData$count <- predict(md, predictors)
+
+plot_ly(data=forecastData,  x = ~timestamp, 
+              y = ~count, name = 'fc', mode = "lines", type="scatter") %>%
+                layout(                yaxis = list(rangemode = "tozero")) 
+
+
+```
+The final modal uses mtry = `r as.numeric(md$bestTune)` with an accurancy of `r percent(md$results[md$results$mtry==as.numeric(md$bestTune),2])`. This is better than the minimal threshold of 99%. The in of sample error is `r percent(1-md$results[md$results$mtry==as.numeric(md$bestTune),2])`
+
+#Final Model
+```{r finalModel, cache=TRUE,  warning=FALSE}
+
+trackModelsFinal <- trackDetail %>% filter(trackType==0) %>% select(id,name)
+dataFinal <- createModelData(trackDetail, trackSector, sectorHourCounts, holiday, holidays, weatherHourly)
+
+mds <- list()
+for (trackId in trackModelsFinal$id) {
+    print(trackModelsFinal[trackModelsFinal$id==trackId,]$name)
+    mdt <- createModelRf(dataFinal, trackId)
+    print(mdt)
+    mds[[trackModelsFinal[trackModelsFinal$id==trackId,]$name]] <- mdt
+}
+
+```
+```{r finalModel2, cache=TRUE,  warning=FALSE}
+
+trackModelsFinal2 <- trackDetail %>% filter(trackType==0) %>% select(id,name)
+dataFinal2 <- createModelData(trackDetail, trackSector, sectorHourCounts, holiday, holidays, weatherHourly)
+
+mds2 <- list()
+for (trackId in trackModelsFinal2$id) {
+    print(trackModelsFinal2[trackModelsFinal2$id==trackId,]$name)
+    mdt2 <- createModelRf2(dataFinal2, trackId)
+    print(mdt2)
+    mds2[[trackModelsFinal2[trackModelsFinal2$id==trackId,]$name]] <- mdt2
+}
+
+```
+
+
+```{r cache=TRUE}
+mdf2 <- mds2[["Amerongen"]]
+
+dataTrack <- data %>% filter(id==2,hour>=6 & hour <=21) %>% select(-id)
+intrain <- createDataPartition(y=dataTrack$count, p=0.01, list=FALSE) #0.7
+predictors <- dataTrack[intrain,] %>% select(-count)
+
+
+fc <- predict(mdf2, predictors)
+vg <-data.frame(r=dataTrack[intrain,]$count, fc =fc, fci = as.integer(fc))
+```
+
+```{r forecast, cache=TRUE}
+weatherForecast <- getWeatherForecast()
+
+forecastDataFinal <- createForecastData(1, ymd("2017-01-30"), 14, holiday, holidays, weatherForecast)
+
+forecastDataFinal$countAM <- forecastRf(mds2[["Amerongen"]], forecastDataFinal)
+forecastDataFinal$countHG <- forecastRf(mds2[["Hoge Ginkel"]], forecastDataFinal)
+forecastDataFinal$countKW <- forecastRf(mds2[["Kwintelooijen"]], forecastDataFinal)
+forecastDataFinal$countLE <- forecastRf(mds2[["Leersum"]], forecastDataFinal)
+forecastDataFinal$countRH <- forecastRf(mds2[["Rhenen"]], forecastDataFinal)
+forecastDataFinal$countZE <- forecastRf(mds2[["Zeist"]], forecastDataFinal)
+forecastDataFinal$countAU <- forecastRf(mds2[["Austerlitz"]], forecastDataFinal)
+
+plot_ly(data=forecastDataFinal,  x = ~timestamp, 
+              y = ~countAM, name = 'Amerongen', mode = "lines", type="scatter") %>%
+    add_trace(y = ~countHG, name = 'Hoge Ginkel', mode = 'lines') %>%
+    add_trace(y = ~countKW, name = 'Kwintelooijen', mode = 'lines') %>%
+    add_trace(y = ~countLE, name = 'Leersum', mode = 'lines') %>%
+    add_trace(y = ~countRH, name = 'Rhenen', mode = 'lines') %>%
+    add_trace(y = ~countZE, name = 'Zeist', mode = 'lines') %>%
+    add_trace(y = ~countAU, name = 'Austerlitz', mode = 'lines') %>%
+                layout(yaxis = list(rangemode = "tozero")) 
+    
+```
+
+
+```{r trim, cache=TRUE}
+format(object.size(mds2[["Amerongen"]]),units="Kb")
+count <- predict(mds2[["Amerongen"]], forecastDataFinal)
+trimmedModel <- mds2[["Amerongen"]]
+
+trimmedModel$y <- NULL
+trimmedModel$mse <- NULL
+    trimmedModel$weights <- NULL
+    trimmedModel$fitted.values <- NULL
+    trimmedModel$model <- NULL
+    trimmedModel$prior.weights <- NULL
+    trimmedModel$residuals <- NULL
+    trimmedModel$effects <- NULL
+    trimmedModel$where <- NULL
+trimmedModel$predicted <- NULL
+
+names(trimmedModel$forest)
+sapply(names(trimmedModel), function(x) { format(object.size(trimmedModel[x]),units="Kb") })
+sapply(names(trimmedModel$forest), function(x) { format(object.size(trimmedModel$forest[x]),units="Kb") })
+
+
+format(object.size(trimmedModel),units="Kb")
+countTrimmed <- predict(trimmedModel, forecastDataFinal)
+identical(count,countTrimmed)  
+
+```
+```{r}
+
+```
